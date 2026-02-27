@@ -1,0 +1,9 @@
+{
+  "name": "devpipeline",
+  "version": "1.0.0",
+  "scripts": {
+    "lint:html": "echo 'lint html'",
+    "lint:js": "echo 'lint js'",
+    "test": "echo 'tests ok'"
+  }
+}

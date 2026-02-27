@@ -1,0 +1,123 @@
+name: CI/CD
+
+on:
+  pull_request:
+    branches: ["main"]
+  push:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: CI (lint + tests)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Lint HTML
+        run: npm run lint:html
+
+      - name: Lint JS
+        run: npm run lint:js
+
+      - name: Tests
+        run: npm test --if-present
+
+      - name: Build check
+        run: npm run build --if-present
+
+  deploy:
+    name: Deploy (WireGuard + SSH + Docker)
+    runs-on: ubuntu-latest
+    needs: ci
+    if: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install WireGuard
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wireguard
+
+      - name: Configure WireGuard
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          echo "${{ secrets.WG_CONF }}" | sudo tee /etc/wireguard/wg0.conf >/dev/null
+          sudo wg-quick up wg0
+          sudo wg show
+
+      - name: Wait for VPN + SSH
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in {1..20}; do ping -c 1 -W 1 10.150.0.1 && break || true; sleep 2; done
+          for i in {1..20}; do ping -c 1 -W 1 10.150.0.100 && break || true; sleep 2; done
+          for i in {1..20}; do nc -z -w 2 10.150.0.100 22 && exit 0 || true; sleep 2; done
+          echo "SSH not reachable on prod" >&2
+          exit 1
+
+      - name: Add server to known_hosts (anti-MITM)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -T 10 -p 22 -H 10.150.0.100 >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 10.150.0.100
+          username: ${{ secrets.SRV_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
+          script_stop: true
+          script: |
+            set -euo pipefail
+
+            APP_DIR="$HOME/vincilab"
+            REPO="https://github.com/${{ github.repository }}.git"
+
+            mkdir -p "$APP_DIR"
+            cd "$APP_DIR"
+
+            if [ ! -d ".git" ]; then
+              git clone "$REPO" .
+            else
+              git fetch origin
+              git reset --hard origin/main
+            fi
+
+            docker ps >/dev/null
+
+            docker rm -f frontend || true
+
+            docker build --pull -t frontend:latest .
+            docker run -d --restart unless-stopped --name frontend -p 80:80 frontend:latest
+
+            docker image prune -f
+
+      - name: Tear down VPN
+        if: always()
+        run: sudo wg-quick down wg0
