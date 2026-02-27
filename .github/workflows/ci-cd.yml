@@ -94,34 +94,7 @@ jobs:
           port: 22
           script_stop: true
           script: |
-            set -euo pipefail
-
-            SHA="${{ github.sha }}"
-            IMAGE="frontend:${SHA}"
-            APP_DIR="$HOME/vincilab"
-            REPO="https://github.com/${{ github.repository }}.git"
-            BRANCH="main"
-
-            mkdir -p "$APP_DIR"
-            cd "$APP_DIR"
-
-            if [ ! -d ".git" ]; then
-              git clone --branch "$BRANCH" --single-branch "$REPO" .
-            else
-              git fetch origin "$BRANCH"
-              git reset --hard "origin/$BRANCH"
-            fi
-
-            docker ps >/dev/null
-
-            docker rm -f frontend || true
-
-            docker build --pull -t "$IMAGE" .
-            docker tag "$IMAGE" frontend:latest
-
-            docker run -d --restart unless-stopped --name frontend -p 80:80 "$IMAGE"
-
-            docker image prune -f --filter "until=168h"
+            sudo /usr/local/bin/deploy_frontend.sh "${GITHUB_SHA}"
 
       - name: Tear down VPN
         if: always()
