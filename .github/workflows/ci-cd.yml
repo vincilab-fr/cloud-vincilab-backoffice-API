@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   ci:
-    name: CI (lint + tests)
+    name: CI
     runs-on: ubuntu-latest
 
     steps:
@@ -44,7 +44,7 @@ jobs:
         run: npm run build --if-present
 
   deploy:
-    name: Deploy (WireGuard + SSH + Docker)
+    name: Deploy
     runs-on: ubuntu-latest
     needs: ci
     if: ${{ github.event_name == 'push' && github.ref_name == 'main' }}
@@ -96,27 +96,32 @@ jobs:
           script: |
             set -euo pipefail
 
+            SHA="${{ github.sha }}"
+            IMAGE="frontend:${SHA}"
             APP_DIR="$HOME/vincilab"
             REPO="https://github.com/${{ github.repository }}.git"
+            BRANCH="main"
 
             mkdir -p "$APP_DIR"
             cd "$APP_DIR"
 
             if [ ! -d ".git" ]; then
-              git clone "$REPO" .
+              git clone --branch "$BRANCH" --single-branch "$REPO" .
             else
-              git fetch origin
-              git reset --hard origin/main
+              git fetch origin "$BRANCH"
+              git reset --hard "origin/$BRANCH"
             fi
 
             docker ps >/dev/null
 
             docker rm -f frontend || true
 
-            docker build --pull -t frontend:latest .
-            docker run -d --restart unless-stopped --name frontend -p 80:80 frontend:latest
+            docker build --pull -t "$IMAGE" .
+            docker tag "$IMAGE" frontend:latest
 
-            docker image prune -f
+            docker run -d --restart unless-stopped --name frontend -p 80:80 "$IMAGE"
+
+            docker image prune -f --filter "until=168h"
 
       - name: Tear down VPN
         if: always()
